@@ -12,10 +12,10 @@ const mockNodes: TranslateItem[] = Array.from({ length: 20 }, (_, i) => ({
 function testChunker() {
   console.log('🧪 Testing Text Chunker...');
   
-  // 1. 개수 제한 테스트 (maxItems: 5)
-  const chunksByCount = chunkTextNodes(mockNodes, 5000, 5);
-  console.log(`- Test 1 (Max 5 items): Got ${chunksByCount.length} chunks. (Expected: 4)`);
-  if (chunksByCount.length !== 4) throw new Error('Test 1 Failed');
+  // 1. 개수 제한 테스트 (maxItems: 1)
+  const chunksByCount = chunkTextNodes(mockNodes, 5000, 1);
+  console.log(`- Test 1 (Max 1 items): Got ${chunksByCount.length} chunks. (Expected: 20)`);
+  if (chunksByCount.length !== 20) throw new Error('Test 1 Failed');
 
   console.log('✅ Chunker logic is valid!');
 }

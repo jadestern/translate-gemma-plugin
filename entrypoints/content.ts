@@ -1,12 +1,34 @@
-import { translate, translateBatch } from '@/lib/translate';
+import { translate, translateBatch, containsKorean } from '@/lib/translate';
 import { extractTextNodes, debugTextNodes, unmaskText } from '@/lib/dom-utils';
 import { chunkTextNodes } from '@/lib/text-chunker';
+
+const MAX_BATCH_RETRIES = 1;  // 배치는 빠르게 포기 (총 2번 시도)
+const MAX_SINGLE_RETRIES = 2; // 낱개는 더 시도 (총 3번 시도)
+
+// 설정 기본값
+const DEFAULT_SETTINGS = {
+  showSelectionButton: false,
+};
 
 export default defineContentScript({
   matches: ['<all_urls>'],
   cssInjectionMode: 'ui',
 
-  main() {
+  async main() {
+    // 설정 로드
+    const settings = await browser.storage.sync.get(DEFAULT_SETTINGS);
+    let showSelectionButton = settings.showSelectionButton;
+
+    // 설정 변경 감지
+    browser.storage.onChanged.addListener((changes, area) => {
+      if (area === 'sync' && changes.showSelectionButton) {
+        showSelectionButton = changes.showSelectionButton.newValue;
+        if (translateBtn) {
+          translateBtn.style.display = 'none';
+        }
+      }
+    });
+
     let progressToast: HTMLElement | null = null;
 
     function showToast(message: string, isDone: boolean = false) {
@@ -64,49 +86,102 @@ export default defineContentScript({
           showToast(`⏳ 번역 중... ${i + 1}/${chunks.length} (${progress}%)`);
 
           try {
-            let translatedBatch: string[];
-            try {
-              translatedBatch = await translateBatch(chunk.texts);
-            } catch (batchErr) {
-              console.warn(`⚠️ 배치 번역 실패(청크 ${i}), 낱개 번역으로 전환`);
-              translatedBatch = [];
-              for (const text of chunk.texts) {
-                const single = await translate({ text });
-                translatedBatch.push(single);
+            let translatedBatch: string[] = [];
+            const SKIP_MARKER = '__SKIP_TRANSLATION__';
+            
+            // 배치 번역 시도 (빠르게 포기하고 낱개로 전환)
+            for (let attempt = 0; attempt <= MAX_BATCH_RETRIES; attempt++) {
+              try {
+                translatedBatch = await translateBatch(chunk.texts);
+                
+                // 한글 검증
+                const invalidItems = translatedBatch
+                  .map((t, idx) => ({ t, idx }))
+                  .filter(({ t }) => !containsKorean(t));
+                
+                if (invalidItems.length === 0) break; // 성공
+                
+                console.warn(`⚠️ 배치 중 ${invalidItems.length}개 한글 부족 (시도 ${attempt + 1}/${MAX_BATCH_RETRIES + 1})`);
+                invalidItems.slice(0, 3).forEach(({ t, idx }) => {
+                  console.log(`  [${idx}] "${t.slice(0, 50)}..."`);
+                });
+                
+                if (attempt === MAX_BATCH_RETRIES) {
+                  // 마지막 시도: 실패한 항목만 개별 재번역
+                  console.log('🔄 실패 항목 개별 재번역 시도...');
+                  for (const { idx } of invalidItems) {
+                    let success = false;
+                    for (let retry = 0; retry <= MAX_SINGLE_RETRIES; retry++) {
+                      const single = await translate({ text: chunk.texts[idx] });
+                      if (containsKorean(single)) {
+                        translatedBatch[idx] = single;
+                        success = true;
+                        break;
+                      }
+                    }
+                    if (!success) {
+                      console.warn(`⚠️ [${idx}] 번역 실패, 원본 유지`);
+                      translatedBatch[idx] = SKIP_MARKER;
+                    }
+                  }
+                }
+              } catch (batchErr) {
+                console.warn(`⚠️ 배치 번역 실패(청크 ${i}), 낱개 번역으로 전환:`, batchErr);
+                translatedBatch = [];
+                for (const text of chunk.texts) {
+                  let translated = SKIP_MARKER;
+                  for (let retry = 0; retry <= MAX_SINGLE_RETRIES; retry++) {
+                    const single = await translate({ text });
+                    if (containsKorean(single)) {
+                      translated = single;
+                      break;
+                    }
+                  }
+                  if (translated === SKIP_MARKER) {
+                    console.warn(`⚠️ 개별 번역 실패, 원본 유지`);
+                  }
+                  translatedBatch.push(translated);
+                }
+                break;
               }
             }
             
             chunk.nodes.forEach((item, index) => {
               const translatedResult = translatedBatch[index];
-              if (translatedResult) {
-                const el = item.element;
-                // 원본 보존
-                if (!el.dataset.tgOriginal) {
-                  el.dataset.tgOriginal = el.innerHTML;
-                }
-                
-                // 디버그: 마스킹된 텍스트와 번역 결과 비교
-                if (item.isMasked) {
-                  console.group(`🔍 마스킹 디버그 [${index}]`);
-                  console.log('원본 마스킹:', item.originalText);
-                  console.log('번역 결과:', translatedResult);
-                  console.log('tagMap:', item.tagMap);
-                  console.groupEnd();
-                }
-                
-                // 마스킹된 텍스트인 경우 HTML로 복구
-                let finalHTML: string;
-                if (item.isMasked && item.tagMap) {
-                  finalHTML = unmaskText(translatedResult, item.tagMap);
-                } else {
-                  finalHTML = translatedResult;
-                }
-
-                // 결과 적용
-                el.innerHTML = finalHTML;
-                el.dataset.tgState = 'translated';
-                el.dataset.tgTranslatedHtml = finalHTML;
+              const el = item.element;
+              
+              // 원본 보존 (항상)
+              if (!el.dataset.tgOriginal) {
+                el.dataset.tgOriginal = el.innerHTML;
               }
+              
+              // 번역 실패(SKIP_MARKER)면 원본 유지
+              if (!translatedResult || translatedResult === SKIP_MARKER) {
+                console.log(`⏭️ [${index}] 원본 유지`);
+                return;
+              }
+              
+              // 디버그: 마스킹된 텍스트와 번역 결과 비교
+              if (item.isMasked) {
+                console.group(`🔍 마스킹 디버그 [${index}]`);
+                console.log('원본 마스킹:', item.originalText);
+                console.log('번역 결과:', translatedResult);
+                console.log('tagMap:', item.tagMap);
+                console.groupEnd();
+              }
+              
+              // 마스킹된 텍스트인 경우 HTML로 복구
+              let finalHTML: string;
+              if (item.isMasked && item.tagMap) {
+                finalHTML = unmaskText(translatedResult, item.tagMap);
+              } else {
+                finalHTML = translatedResult;
+              }
+
+              // 결과 적용
+              el.innerHTML = finalHTML;
+              el.dataset.tgState = 'translated';
+              el.dataset.tgTranslatedHtml = finalHTML;
             });
 
           } catch (err) {
@@ -154,10 +229,41 @@ export default defineContentScript({
       return { state: newState, count: successCount };
     }
 
+    async function translateSelection() {
+      const selection = window.getSelection();
+      const selectedText = selection?.toString().trim();
+      if (!selectedText) {
+        showToast('선택된 텍스트가 없습니다.', true);
+        return;
+      }
+
+      showToast('⏳ 선택 텍스트 번역 중...');
+      try {
+        const translated = await translate({ text: selectedText });
+        if (tooltip) {
+          const range = selection?.getRangeAt(0);
+          const rect = range?.getBoundingClientRect();
+          if (rect) {
+            tooltip.textContent = translated;
+            tooltip.style.left = `${rect.left + window.scrollX}px`;
+            tooltip.style.top = `${rect.bottom + window.scrollY + 5}px`;
+            tooltip.style.display = 'block';
+          }
+        }
+        showToast('✅ 번역 완료!', true);
+      } catch (err) {
+        console.error(err);
+        showToast('❌ 번역 실패', true);
+      }
+    }
+
     browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.action === 'translatePage') {
         translateFullPage();
         sendResponse({ message: '번역 시작...' });
+      } else if (message.action === 'translateSelection') {
+        translateSelection();
+        sendResponse({ message: '선택 번역 시작...' });
       } else if (message.action === 'toggleTranslation') {
         const result = toggleAllTranslations();
         sendResponse(result);
@@ -200,7 +306,24 @@ export default defineContentScript({
     translateBtn = createTranslateButton();
     tooltip = createTooltip();
 
+    // 키보드 단축키 직접 처리 (fallback)
+    document.addEventListener('keydown', (e) => {
+      // Ctrl+T (Mac) 또는 Alt+T (Windows/Linux) - 선택 번역
+      if ((e.ctrlKey && !e.metaKey && e.key === 't') || (e.altKey && e.key === 't')) {
+        e.preventDefault();
+        console.log('Shortcut detected: translate-selection');
+        translateSelection();
+      }
+      // Ctrl+Shift+T (Mac) 또는 Alt+Shift+T (Windows/Linux) - 전체 페이지 번역
+      if ((e.ctrlKey && !e.metaKey && e.shiftKey && e.key === 'T') || (e.altKey && e.shiftKey && e.key === 'T')) {
+        e.preventDefault();
+        console.log('Shortcut detected: translate-page');
+        translateFullPage();
+      }
+    });
+
     document.addEventListener('mouseup', (e) => {
+      if (!showSelectionButton) return;
       const selection = window.getSelection();
       const selectedText = selection?.toString().trim();
       if (selectedText && selectedText.length > 0 && translateBtn) {
