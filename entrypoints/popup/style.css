@@ -1,0 +1,102 @@
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+}
+
+body {
+  margin: 0;
+  min-width: 350px;
+  min-height: 200px;
+}
+
+#app {
+  padding: 1rem;
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+h1 {
+  font-size: 1.2em;
+  margin: 0;
+  text-align: center;
+}
+
+textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 0.5rem;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: #1a1a1a;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.9em;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+button {
+  padding: 0.6rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: #4f46e5;
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+button:hover {
+  background: #4338ca;
+}
+
+.button-group {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.button-group button {
+  flex: 1;
+}
+
+.secondary-btn {
+  background: #4b5563;
+}
+
+.secondary-btn:hover {
+  background: #374151;
+}
+
+#status {
+  font-size: 0.8em;
+  color: #9ca3af;
+  text-align: center;
+}
+
+#result {
+  padding: 0.75rem;
+  background: #1a1a1a;
+  border-radius: 6px;
+  min-height: 60px;
+  white-space: pre-wrap;
+  font-size: 0.9em;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  textarea, #result {
+    background: #f5f5f5;
+    border-color: #ddd;
+  }
+}
