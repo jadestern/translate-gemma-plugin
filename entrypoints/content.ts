@@ -89,60 +89,62 @@ export default defineContentScript({
             let translatedBatch: string[] = [];
             const SKIP_MARKER = '__SKIP_TRANSLATION__';
             
-            // 배치 번역 시도 (빠르게 포기하고 낱개로 전환)
-            for (let attempt = 0; attempt <= MAX_BATCH_RETRIES; attempt++) {
-              try {
-                translatedBatch = await translateBatch(chunk.texts);
-                
-                // 한글 검증
-                const invalidItems = translatedBatch
-                  .map((t, idx) => ({ t, idx }))
-                  .filter(({ t }) => !containsKorean(t));
-                
-                if (invalidItems.length === 0) break; // 성공
-                
-                console.warn(`⚠️ 배치 중 ${invalidItems.length}개 한글 부족 (시도 ${attempt + 1}/${MAX_BATCH_RETRIES + 1})`);
-                invalidItems.slice(0, 3).forEach(({ t, idx }) => {
-                  console.log(`  [${idx}] "${t.slice(0, 50)}..."`);
-                });
-                
-                if (attempt === MAX_BATCH_RETRIES) {
-                  // 마지막 시도: 실패한 항목만 개별 재번역
-                  console.log('🔄 실패 항목 개별 재번역 시도...');
-                  for (const { idx } of invalidItems) {
-                    let success = false;
+            // 문장이 1개뿐이면 배치가 아닌 일반 번역 호출 (에러 방지 및 속도 향상)
+            if (chunk.texts.length === 1) {
+              let translated = SKIP_MARKER;
+              const text = chunk.texts[0];
+              for (let retry = 0; retry <= MAX_SINGLE_RETRIES; retry++) {
+                const result = await translate({ text });
+                if (containsKorean(result)) {
+                  translated = result;
+                  break;
+                }
+              }
+              translatedBatch = [translated];
+            } else {
+              // 배치 번역 시도 (2개 이상일 때만)
+              for (let attempt = 0; attempt <= MAX_BATCH_RETRIES; attempt++) {
+                try {
+                  translatedBatch = await translateBatch(chunk.texts);
+                  
+                  // 한글 검증
+                  const invalidItems = translatedBatch
+                    .map((t, idx) => ({ t, idx }))
+                    .filter(({ t }) => !containsKorean(t));
+                  
+                  if (invalidItems.length === 0) break; // 성공
+                  
+                  if (attempt === MAX_BATCH_RETRIES) {
+                    // 마지막 시도: 실패한 항목만 개별 재번역
+                    for (const { idx } of invalidItems) {
+                      let success = false;
+                      for (let retry = 0; retry <= MAX_SINGLE_RETRIES; retry++) {
+                        const single = await translate({ text: chunk.texts[idx] });
+                        if (containsKorean(single)) {
+                          translatedBatch[idx] = single;
+                          success = true;
+                          break;
+                        }
+                      }
+                      if (!success) translatedBatch[idx] = SKIP_MARKER;
+                    }
+                  }
+                } catch (batchErr) {
+                  console.warn(`⚠️ 배치 번역 실패(청크 ${i}), 낱개 번역으로 전환:`, batchErr);
+                  translatedBatch = [];
+                  for (const text of chunk.texts) {
+                    let translated = SKIP_MARKER;
                     for (let retry = 0; retry <= MAX_SINGLE_RETRIES; retry++) {
-                      const single = await translate({ text: chunk.texts[idx] });
+                      const single = await translate({ text });
                       if (containsKorean(single)) {
-                        translatedBatch[idx] = single;
-                        success = true;
+                        translated = single;
                         break;
                       }
                     }
-                    if (!success) {
-                      console.warn(`⚠️ [${idx}] 번역 실패, 원본 유지`);
-                      translatedBatch[idx] = SKIP_MARKER;
-                    }
+                    translatedBatch.push(translated);
                   }
+                  break;
                 }
-              } catch (batchErr) {
-                console.warn(`⚠️ 배치 번역 실패(청크 ${i}), 낱개 번역으로 전환:`, batchErr);
-                translatedBatch = [];
-                for (const text of chunk.texts) {
-                  let translated = SKIP_MARKER;
-                  for (let retry = 0; retry <= MAX_SINGLE_RETRIES; retry++) {
-                    const single = await translate({ text });
-                    if (containsKorean(single)) {
-                      translated = single;
-                      break;
-                    }
-                  }
-                  if (translated === SKIP_MARKER) {
-                    console.warn(`⚠️ 개별 번역 실패, 원본 유지`);
-                  }
-                  translatedBatch.push(translated);
-                }
-                break;
               }
             }
             

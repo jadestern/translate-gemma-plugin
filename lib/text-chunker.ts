@@ -8,7 +8,7 @@ export interface Chunk {
 /**
  * 번역 아이템들을 API 요청 가능한 청크 단위로 묶습니다.
  */
-export function chunkTextNodes(nodes: TranslateItem[], maxChars: number = 800, maxItems: number = 1): Chunk[] {
+export function chunkTextNodes(nodes: TranslateItem[], maxChars: number = 800, maxItems: number = 3): Chunk[] {
   const chunks: Chunk[] = [];
   let currentNodes: TranslateItem[] = [];
   let currentTexts: string[] = [];

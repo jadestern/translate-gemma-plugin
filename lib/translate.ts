@@ -107,7 +107,7 @@ ${text}<end_of_turn>
 `;
 
   const requestBody = {
-    model: 'translategemma-4b-it',
+    model: 'translategemma-12b-it',
     prompt: prompt,
     temperature: 0.1,
     max_tokens: 2048,
@@ -141,7 +141,7 @@ ${combinedText}<end_of_turn>
 `;
 
   const requestBody = {
-    model: 'translategemma-4b-it',
+    model: 'translategemma-12b-it',
     prompt: prompt,
     temperature: 0.1,
     max_tokens: 4096,
